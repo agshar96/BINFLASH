@@ -28,7 +28,7 @@ def create_symmetric_sparse_matrix(N = 1024, base_prob=0.5, decay=0.1, pow = 10)
             # Calculate the probability based on the distance from the diagonal
             distance = abs(i - j)
 
-            prob = max(base_prob * np.exp(-decay * distance), 0.0002)
+            prob = max(base_prob * np.exp(-decay * distance), 0.0002) # Illustration of exponential decay
             # prob = 8 / (1000 * round(math.log2(distance + 1)) * (pow * 0.5))
             
             # Fill the matrix with 1 based on the probability
@@ -45,9 +45,6 @@ def plot_binary_matrix(matrix):
     '''
     N = matrix.shape[0]
     plt.imshow(matrix, cmap='binary', interpolation='none')
-    # plt.xticks(np.arange(0, N, 1))
-    # plt.yticks(np.arange(0, N, 1))
-    # plt.grid(color='black', linewidth=0.5)
     plt.show()
 
 def big_matrix_from_diag(small_mat, N):
@@ -160,7 +157,7 @@ def return_non_zero_columns(matrix, offset):
 
 def pad_with_neg1(lst, n):
     '''
-        Pads the list with zeros to make its length n
+        Pads the list with -1 to make its length n
     '''
     return lst + [-1]*(n - len(lst))
 
@@ -186,8 +183,151 @@ def create_stride_and_idx_mat(inp_matrix, BLKSZE_I, BLKSZE_J):
         print("Finished row", i//BLKSZE_I)
     return stride_matrix, idx_matrix
 
-
+def get_causal_matrix(N):
+    '''
+        Return lower triangular matrix of size NxN
+    '''
+    causal_matrix = torch.ones(N, N)
+    causal_matrix = torch.tril(causal_matrix)
+    return causal_matrix
    
+def get_qk_causal_matrix(N, num_deletes = 10):
+    '''
+        We return a lower triangular ones matrix of size (N ) x (N ) then
+        we select num_deletes columns and rows randomly to delete.
+    '''
+    causal_matrix = torch.ones(N, N)
+    causal_matrix = torch.tril(causal_matrix)
+    # Select num_deletes number from range (0, N+num_deletes)
+    indices_col = np.random.choice(range(1, N - 1), size=N - num_deletes - 2, replace=False)
+    indices_row = np.random.choice(range(1, N -1), size=N - num_deletes - 2, replace=False)
 
+    # sort in ascending order
+    indices_col.sort()
+    indices_row.sort()
 
+    indices_col_final = torch.tensor([0] + list(indices_col) + [N  - 1])
+    indices_row_final = torch.tensor([0] + list(indices_row) + [N- 1])
     
+    # Delete the selected columns and rows from the causal_matrix
+    causal_matrix = torch.index_select(causal_matrix, dim=0, index=torch.tensor(indices_row_final))
+    causal_matrix = torch.index_select(causal_matrix, dim=1, index=torch.tensor(indices_col_final))
+    
+    return causal_matrix
+
+def get_subtracted_list(N, n_min = 10, n_max = 20):
+    '''
+        In a loop we select a random range in the range (n_min, n_max) and subtract it from N.
+        We add the subtracted value to a list and return it.
+    '''
+    subtracted_list = []
+    while N > n_max:
+        n = np.random.randint(n_min, n_max)
+        subtracted_list.append(n)
+        N -= n
+    subtracted_list.append(N)
+    return subtracted_list
+
+def get_hash_causal_matrix(N, n_min = 10, n_max = 20):
+
+    subtracted_list = get_subtracted_list(N, n_min, n_max)
+    output_mat = torch.zeros(N, N)
+    start_idx= 0
+    for num in subtracted_list:
+        output_mat[start_idx:start_idx+num, start_idx:start_idx+num] = 1
+        start_idx += num
+    output_mat = torch.tril(output_mat)
+    return output_mat
+
+def return_all_ones(inp_matrx):
+    '''
+        This function returns a one if all the elements in the input matrix are 1 
+    '''
+    return torch.all(inp_matrx == 1)
+
+def get_num_ones_and_offset(matrix, BLKSZE_I, BLKSZE_J):
+
+    num_ones = torch.zeros((matrix.shape[0]//BLKSZE_I,))
+    offset = torch.zeros((matrix.shape[0]//BLKSZE_I,))
+
+    for i in range(0, matrix.shape[0], BLKSZE_I):
+        all_one_found = False
+        for j in range(0, matrix.shape[1], BLKSZE_J):
+            cur_out = return_all_ones(matrix[i:i+BLKSZE_I, j:j+BLKSZE_J])
+            num_ones[i//BLKSZE_I] += int(cur_out)
+            if not all_one_found and int(cur_out):
+                offset[i//BLKSZE_I] = j//BLKSZE_J
+                all_one_found = True
+        print("Finished row", i//BLKSZE_I)
+
+    return num_ones, offset
+
+def get_int32_from_binaryMat(matrix):
+    # Convert the matrix to a numpy array
+    matrix = matrix.numpy()
+    # Prepare a list to hold the resulting 32-bit integers
+    int32_array = []
+
+    # Iterate over each row and process it
+    for row in range(matrix.shape[0]):
+        # Read the row
+        row_bits = matrix[row, :]
+        
+        # Initialize a list to hold 32-bit integers for this row
+        row_int32_list = []
+        
+        # Process the column in chunks of 32 bits
+        for i in range(0, len(row_bits), 32):
+            # Get a chunk of 32 bits, if the chunk is less than 32 bits, pad with zeros
+            chunk = row_bits[i:i+32]
+            if len(chunk) < 32:
+                chunk = np.pad(chunk, (0, 32-len(chunk)), 'constant')
+            
+            # Convert the chunk to a 32-bit integer
+            int32_val = int(''.join(chunk.astype(str)), 2)
+            
+            # Append the integer to the column's list
+            row_int32_list.append(int32_val)
+        
+        # Append the list of 32-bit integers for this column to the main list
+        int32_array.append(row_int32_list)
+
+    # Convert the list of lists into a numpy array
+    # int32_array = np.array(int32_array, dtype=np.uint32)
+    int32_array = torch.tensor(int32_array, dtype=torch.int32)
+    return int32_array
+
+def get_16bit_from_binaryMat(matrix):
+    # Convert the matrix to a numpy array
+    matrix = matrix.numpy()
+    # Prepare a list to hold the resulting 32-bit integers
+    bit16_arr = []
+
+    # Iterate over each row and process it
+    for row in range(matrix.shape[0]):
+        # Read the row
+        row_bits = matrix[row, :]
+        
+        # Initialize a list to hold 16-bit integers for this row
+        row_16bit_list = []
+        
+        # Process the column in chunks of 16 bits
+        for i in range(0, len(row_bits), 16):
+            # Get a chunk of 32 bits, if the chunk is less than 16 bits, pad with zeros
+            chunk = row_bits[i:i+16]
+            if len(chunk) < 16:
+                chunk = np.pad(chunk, (0, 16-len(chunk)), 'constant')
+            
+            # Convert the chunk to a 16-bit integer
+            bit16_val = int(''.join(chunk.astype(str)), 2)
+            
+            # Append the integer to the column's list
+            row_16bit_list.append(bit16_val)
+        
+        # Append the list of 32-bit integers for this column to the main list
+        bit16_arr.append(row_16bit_list)
+
+    # Convert the list of lists into a numpy array
+    # int32_array = np.array(int32_array, dtype=np.uint32)
+    bit16_arr = torch.tensor(bit16_arr, dtype=torch.int16)
+    return bit16_arr

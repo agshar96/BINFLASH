@@ -3,64 +3,49 @@ import torch
 import triton
 import triton.language as tl
 
-
-'''
-This file is to test the fix implementation of backward pass of the triton.
-If it works it will be moved to test_implementation.py file
-'''
-
-
 def is_hip():
     return False
 
 @triton.jit
+def return_binBlkBit(data, shift_digit):
+    checkBit = 1 << (15 - shift_digit)
+    if data & checkBit:
+        return True
+    return False
+
+@triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
-                    K, V, maskMat, strideMat, idxMat, #
-                    start_m, qk_scale,  #
-                    stride_qm, stride_qk,  #
-                    maskMat_stride_d1, maskMat_stride_d2,  #
-                    idxMat_stride_d1, idxMat_stride_d2,  #
-                    strideMat_d1, strideMat_d2,  #
+                    K_block_ptr, V_block_ptr, Mask_block_ptr, #
+                    blkBinaryMask_ptr, start_m, qk_scale,  #
+                    blkBinaryMask_stride_d1, blkBinaryMask_stride_d2,  # Strides for BLK_ptr
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
-                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  offs_k: tl.constexpr, #
                     N_CTX: tl.constexpr, fp8_v: tl.constexpr):
-    # range of values handled by this stage
-    if STAGE == 1:
-        lo, hi = 0, start_m * BLOCK_M
-    elif STAGE == 2:
-        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
-        lo = tl.multiple_of(lo, BLOCK_M)
-    # causal = False
-    # This is default for random masking case too
-    else:
-        lo, hi = 0, N_CTX
-    K_block_ptr = K + offs_n[None, :] * stride_qm + offs_k[:, None] * stride_qk
-    V_block_ptr = V + offs_n[:, None] * stride_qm + offs_k[None, :] * stride_qk
-    Mask_block_ptr = maskMat + offs_m[:, None] * maskMat_stride_d1 + offs_n[None, :] * maskMat_stride_d2
-    idxMat += start_m * idxMat_stride_d1
+
+    lo, hi = 0, N_CTX
+    K_block_ptr = tl.advance(K_block_ptr, (0, lo))
+    V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
+    Mask_block_ptr = tl.advance(Mask_block_ptr, (0, lo))
+    binaryBlk_val = tl.cast(0, tl.int16)
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
-        curr_n = start_n // BLOCK_N
-
-        ### TESTING CODE
-        strideMat_ptr = start_m * strideMat_d1 + curr_n * strideMat_d2
-        strideMat_val = tl.load(strideMat + strideMat_ptr)
-        if strideMat_val:
-            idxMat_ptrs = tl.arange(0, strideMat_val) * idxMat_stride_d2
-            idxMat_val = tl.load(idxMat + idxMat_ptrs)
-            idxMat += strideMat_val * idxMat_stride_d2
-        #### TESTING CODE
-
+        cur_val = start_n // BLOCK_N
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        # -- compute qk ----
-        k = tl.load(K_block_ptr)
-        qk = tl.dot(q, k)
-        if STAGE == 2:
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
-        else:
+        #### Processing to read binary mask as 32 bit integer ####
+        mod_cur_val = cur_val % 16
+        if mod_cur_val == 0:
+            div_cur_val = cur_val // 16
+            binaryBlk_ptr = start_m * blkBinaryMask_stride_d1 + div_cur_val * blkBinaryMask_stride_d2
+            binaryBlk_val = tl.load(blkBinaryMask_ptr + binaryBlk_ptr)
+            # binaryBlk_val = tl.cast(binaryBlk_val, tl.int32)
+            # print('binaryBlk_val: ', binaryBlk_val)
+
+        process_Blk = return_binBlkBit(binaryBlk_val, mod_cur_val)
+        #### Processing Overfor reading binary mask as 32 bit integer ####
+        if process_Blk:
+            # -- compute qk ----
+            k = tl.load(K_block_ptr)
+            qk = tl.dot(q, k)
+
             ## Added for random masking case
             mask = tl.load(Mask_block_ptr)
             qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
@@ -68,38 +53,42 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             # qk = qk * qk_scale - m_ij[:, None]
             qk -= m_ij[:, None]
-        p = tl.math.exp2(qk)
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
-        alpha = tl.math.exp2(m_i - m_ij)
-        l_i = l_i * alpha + l_ij
-        # -- update output accumulator --
-        acc = acc * alpha[:, None]
-        # update acc
-        v = tl.load(V_block_ptr)
-        if fp8_v:
-            p = p.to(tl.float8e5)
-        else:
-            p = p.to(tl.float16)
-        acc = tl.dot(p, v, acc)
-        # update m_i and l_i
-        m_i = m_ij
-        K_block_ptr += BLOCK_N * stride_qm
-        V_block_ptr += BLOCK_N * stride_qm
-        Mask_block_ptr += BLOCK_N * maskMat_stride_d2
+            ##### Separate block as I might move it for casual cases ####
+            
+            p = tl.math.exp2(qk)
+            l_ij = tl.sum(p, 1)
+            # -- update m_i and l_i
+            alpha = tl.math.exp2(m_i - m_ij)
+            l_i = l_i * alpha + l_ij
+            # -- update output accumulator --
+            acc = acc * alpha[:, None]
+            # update acc
+            v = tl.load(V_block_ptr)
+            if fp8_v:
+                p = p.to(tl.float8e5)
+            else:
+                p = p.to(tl.float16)
+            acc = tl.dot(p, v, acc)
+            # update m_i and l_i
+            m_i = m_ij
+        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
+        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+        Mask_block_ptr = tl.advance(Mask_block_ptr, (0, BLOCK_N))
+        # blkBinaryMask_ptr = tl.advance(blkBinaryMask_ptr, (0, 1))
     return acc, l_i, m_i
 
 @triton.jit
-def _attn_fwd(Q, K, V, sm_scale, M, Out, maskMat, strideMat, idxMat, #
+def _attn_fwd(Q, K, V, sm_scale, M, Out, maskMat, blkBinaryMask, #
               stride_qz, stride_qh, stride_qm, stride_qk,  #
+              stride_kz, stride_kh, stride_kn, stride_kk,  #
+              stride_vz, stride_vh, stride_vk, stride_vn,  #
+              stride_oz, stride_oh, stride_om, stride_on,  #
               maskMat_stride_d1, maskMat_stride_d2,  #
-              strideMat_d1, strideMat_d2,  #
-              idxMat_stride_d1, idxMat_stride_d2,  #
+              blkBinaryMask_stride_d1, blkBinaryMask_stride_d2,  #
               Z, H, N_CTX,  #
               HEAD_DIM: tl.constexpr,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
-              STAGE: tl.constexpr  #
               ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
@@ -108,16 +97,60 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out, maskMat, strideMat, idxMat, #
     off_h = off_hz % H
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
 
-    # offset pointers for batch/head
-    Q += qvk_offset
-    V += qvk_offset
-    K += qvk_offset
-    Out += qvk_offset
+    # block pointers
+    Q_block_ptr = tl.make_block_ptr(
+        base=Q + qvk_offset,
+        shape=(N_CTX, HEAD_DIM),
+        strides=(stride_qm, stride_qk),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, HEAD_DIM),
+        order=(1, 0),
+    )
+    v_order: tl.constexpr = (0, 1) if V.dtype.element_ty == tl.float8e5 else (1, 0)
+    V_block_ptr = tl.make_block_ptr(
+        base=V + qvk_offset,
+        shape=(N_CTX, HEAD_DIM),
+        strides=(stride_vk, stride_vn),
+        offsets=(0, 0),
+        block_shape=(BLOCK_N, HEAD_DIM),
+        order=v_order,
+    )
+    K_block_ptr = tl.make_block_ptr(
+        base=K + qvk_offset,
+        shape=(HEAD_DIM, N_CTX),
+        strides=(stride_kk, stride_kn),
+        offsets=(0, 0),
+        block_shape=(HEAD_DIM, BLOCK_N),
+        order=(0, 1),
+    )
+    O_block_ptr = tl.make_block_ptr(
+        base=Out + qvk_offset,
+        shape=(N_CTX, HEAD_DIM),
+        strides=(stride_om, stride_on),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, HEAD_DIM),
+        order=(1, 0),
+    )
+    Mask_block_ptr = tl.make_block_ptr(
+        base=maskMat,
+        shape=(N_CTX, N_CTX),
+        strides=(maskMat_stride_d1, maskMat_stride_d2),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_N),
+        order=(1, 0),
+    )
+    # blkBinaryMask_ptr = tl.make_block_ptr(
+    #     base=blkBinaryMask,
+    #     shape=(N_CTX // BLOCK_M, N_CTX // BLOCK_N),
+    #     strides=(blkBinaryMask_stride_d1, blkBinaryMask_stride_d2),
+    #     offsets=(start_m, 0),
+    #     block_shape=(1, 1),
+    #     order=(1, 0),
+    # )
     # initialize offsets
-
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, HEAD_DIM)
+    # offs_n = tl.arange(0, BLOCK_N)
+
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
@@ -126,31 +159,16 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out, maskMat, strideMat, idxMat, #
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
-    Q_block_ptr = Q + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
-    O_block_ptr = Out + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
     q = tl.load(Q_block_ptr)
-    # stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
-    if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K, V, maskMat, strideMat, idxMat, #
-                                        start_m, qk_scale,  #
-                                        stride_qm, stride_qk,  #
-                                        maskMat_stride_d1, maskMat_stride_d2,  #
-                                        strideMat_d1, strideMat_d2,  #
-                                        idxMat_stride_d1, idxMat_stride_d2,  #
+    
+
+    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr, Mask_block_ptr, #
+                                        blkBinaryMask, start_m, qk_scale,  #
+                                        blkBinaryMask_stride_d1, blkBinaryMask_stride_d2,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, offs_k, N_CTX, V.dtype.element_ty == tl.float8e5  #
+                                        N_CTX, V.dtype.element_ty == tl.float8e5  #
                                         )
-    # stage 2: on-band
-    if STAGE & 2:
-        # barrier makes it easier for compielr to schedule the
-        # two loops independently
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K, V,  maskMat,#
-                                        start_m, qk_scale,  #
-                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
-                                        )
+
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -179,18 +197,19 @@ def _attn_bwd_preprocess(O, DO,  #
 # The main inner-loop logic for computing dK and dV.
 @triton.jit
 def _attn_bwd_dkdv(dk, dv,  #
-                   Q, k, v, sm_scale, maskMat ,#
+                   Q, k, v, sm_scale, maskMat , blkBinaryMask, #
                    DO,  #
                    M, D,  #
                    # shared by Q/K/V/DO.
                    stride_tok, stride_d,  #
                    stride_m_d1, stride_m_d2,  #
+                   blkBinaryMask_stride_d1, blkBinaryMask_stride_d2,  #
                    H, N_CTX, BLOCK_M1: tl.constexpr,  #
                    BLOCK_N1: tl.constexpr,  #
                    HEAD_DIM: tl.constexpr,  #
                    # Filled in by the wrapper.
                    start_n, start_m, num_steps,  #
-                   MASK: tl.constexpr):
+                   ):
     offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -202,29 +221,42 @@ def _attn_bwd_dkdv(dk, dv,  #
     tl.static_assert(BLOCK_N1 % BLOCK_M1 == 0)
     curr_m = start_m
     step_m = BLOCK_M1
+    curr_n = start_n // BLOCK_N1
+    binaryBlk_val = tl.cast(0, tl.int16)
     for blk_idx in range(num_steps):
-        qT = tl.load(qT_ptrs)
-        # Load m before computing qk to reduce pipeline stall.
-        offs_m = curr_m + tl.arange(0, BLOCK_M1)
-        m = tl.load(M + offs_m)
-        qkT = tl.dot(k, qT)
-        pT = tl.math.exp2(qkT - m[None, :])
-        # Autoregressive masking.
-        if MASK:
+        
+        #### Processing to read binary mask as 32 bit integer ####
+        mod_cur_val = blk_idx % 16
+        if mod_cur_val == 0:
+            div_cur_val = blk_idx // 16
+            blkBinaryMask_ptr = curr_n * blkBinaryMask_stride_d1 + div_cur_val * blkBinaryMask_stride_d2
+            binaryBlk_val = tl.load(blkBinaryMask + blkBinaryMask_ptr)
+        process_Blk = return_binBlkBit(binaryBlk_val, mod_cur_val)
+        #### Processing Overfor reading binary mask as 32 bit integer ####
+
+        if process_Blk:
+            qT = tl.load(qT_ptrs)
+            # Load m before computing qk to reduce pipeline stall.
+            offs_m = curr_m + tl.arange(0, BLOCK_M1)
+            m = tl.load(M + offs_m)
+            qkT = tl.dot(k, qT)
+            pT = tl.math.exp2(qkT - m[None, :])
+            # Autoregressive masking.
             mask = tl.load(maskMat_T_ptrs)
             pT = tl.where(mask, pT, 0.0)
-        do = tl.load(do_ptrs)
-        # Compute dV.
-        ppT = pT
-        ppT = ppT.to(tl.float16)
-        dv += tl.dot(ppT, do)
-        # D (= delta) is pre-divided by ds_scale.
-        Di = tl.load(D + offs_m)
-        # Compute dP and dS.
-        dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
-        dsT = pT * (dpT - Di[None, :])
-        dsT = dsT.to(tl.float16)
-        dk += tl.dot(dsT, tl.trans(qT))
+            
+            do = tl.load(do_ptrs)
+            # Compute dV.
+            ppT = pT
+            ppT = ppT.to(tl.float16)
+            dv += tl.dot(ppT, do)
+            # D (= delta) is pre-divided by ds_scale.
+            Di = tl.load(D + offs_m)
+            # Compute dP and dS.
+            dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
+            dsT = pT * (dpT - Di[None, :])
+            dsT = dsT.to(tl.float16)
+            dk += tl.dot(dsT, tl.trans(qT))
         # Increment pointers.
         curr_m += step_m
         qT_ptrs += step_m * stride_tok
@@ -235,18 +267,19 @@ def _attn_bwd_dkdv(dk, dv,  #
 
 # the main inner-loop logic for computing dQ
 @triton.jit
-def _attn_bwd_dq(dq, q, K, V, maskMat,#
+def _attn_bwd_dq(dq, q, K, V, maskMat, blkBinaryMask, #
                  do, m, D,
                  # shared by Q/K/V/DO.
                  stride_tok, stride_d,  #
                  stride_m_d1, stride_m_d2,  #
+                 blkBinaryMask_stride_d1, blkBinaryMask_stride_d2,  #
                  H, N_CTX,  #
                  BLOCK_M2: tl.constexpr,  #
                  BLOCK_N2: tl.constexpr,  #
                  HEAD_DIM: tl.constexpr,
                  # Filled in by the wrapper.
                  start_m, start_n, num_steps,  #
-                 MASK: tl.constexpr):
+                 ):
     offs_m = start_m + tl.arange(0, BLOCK_M2)
     offs_n = start_n + tl.arange(0, BLOCK_N2)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -259,40 +292,56 @@ def _attn_bwd_dq(dq, q, K, V, maskMat,#
     tl.static_assert(BLOCK_M2 % BLOCK_N2 == 0)
     curr_n = start_n
     step_n = BLOCK_N2
-    for blk_idx in range(num_steps):
-        kT = tl.load(kT_ptrs)
-        vT = tl.load(vT_ptrs)
-        qk = tl.dot(q, kT)
-        p = tl.math.exp2(qk - m)
-        # Autoregressive masking.
-        if MASK:
+    curr_m = start_m // BLOCK_M2
+    binaryBlk_val = tl.cast(0, tl.int16)
+    for blk_idx in range(num_steps):     
+        #### Processing to read binary mask as 32 bit integer ####
+        mod_cur_val = blk_idx % 16
+        if mod_cur_val == 0:
+            div_cur_val = blk_idx // 16
+            binaryBlk_ptr = curr_m * blkBinaryMask_stride_d1 + div_cur_val * blkBinaryMask_stride_d2
+            binaryBlk_val = tl.load(blkBinaryMask + binaryBlk_ptr)
+        
+        process_Blk = return_binBlkBit(binaryBlk_val, mod_cur_val)
+        #### Processing Overfor reading binary mask as 32 bit integer ####
+
+        if process_Blk:
+            kT = tl.load(kT_ptrs)
+            vT = tl.load(vT_ptrs)
+            qk = tl.dot(q, kT)
+            p = tl.math.exp2(qk - m)
+            # Autoregressive masking.
             mask = tl.load(maskMat_ptrs)
             # offs_n = curr_n + tl.arange(0, BLOCK_N2)
             # mask = (offs_m[:, None] >= offs_n[None, :])
             p = tl.where(mask, p, 0.0)
-        # Compute dP and dS.
-        dp = tl.dot(do, vT).to(tl.float32)
-        ds = p * (dp - Di[:, None])
-        ds = ds.to(tl.float16)
-        # Compute dQ.
-        # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
-        dq += tl.dot(ds, tl.trans(kT))
+            
+            # Compute dP and dS.
+            dp = tl.dot(do, vT).to(tl.float32)
+            ds = p * (dp - Di[:, None])
+            ds = ds.to(tl.float16)
+            # Compute dQ.
+            # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
+            dq += tl.dot(ds, tl.trans(kT))
         # Increment pointers.
         curr_n += step_n
         kT_ptrs += step_n * stride_tok
         vT_ptrs += step_n * stride_tok
         maskMat_ptrs += step_n * stride_m_d2
+
     return dq
 
 
 @triton.jit
-def _attn_bwd(Q, K, V, sm_scale,  maskMat, #
+def _attn_bwd(Q, K, V, sm_scale,  maskMat, blkBinaryMask, blkBinaryMask_T, #
               DO,  #
               DQ, DK, DV,  #
               M, D,
               # shared by Q/K/V/DO.
               stride_z, stride_h, stride_tok, stride_d,  #
               stride_m_d1, stride_m_d2,  #
+              blkBinaryMask_stride_d1, blkBinaryMask_stride_d2, #
+              blkBinaryMask_T_stride_d1, blkBinaryMask_T_stride_d2,  #
               H, N_CTX,  #
               BLOCK_M1: tl.constexpr,  #
               BLOCK_N1: tl.constexpr,  #
@@ -355,15 +404,15 @@ def _attn_bwd(Q, K, V, sm_scale,  maskMat, #
     # Compute dK and dV for non-masked blocks.
     dk, dv = _attn_bwd_dkdv(  #
         dk, dv,  #
-        Q, k, v, sm_scale, maskMat, #
+        Q, k, v, sm_scale, maskMat, blkBinaryMask_T, #
         DO,  #
         M, D,  #
         stride_tok, stride_d,  #
         stride_m_d1, stride_m_d2,
+        blkBinaryMask_T_stride_d1, blkBinaryMask_T_stride_d2,  #
         H, N_CTX,  #
         BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
-        start_n, start_m, num_steps,  #
-        MASK=True  #
+        start_n, start_m, num_steps #
     )
 
     dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -406,14 +455,14 @@ def _attn_bwd(Q, K, V, sm_scale,  maskMat, #
     # # stage 2
 
     num_steps = end_n // BLOCK_N2
-    dq = _attn_bwd_dq(dq, q, K, V,  maskMat,#
+    dq = _attn_bwd_dq(dq, q, K, V,  maskMat, blkBinaryMask, #
                       do, m, D,  #
                       stride_tok, stride_d,  #
                       stride_m_d1, stride_m_d2,  #
+                      blkBinaryMask_stride_d1, blkBinaryMask_stride_d2,  #
                       H, N_CTX,  #
                       BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=True  #
+                      start_m, end_n - num_steps * BLOCK_N2, num_steps  #
                       )
     # Write back dQ.
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -421,10 +470,14 @@ def _attn_bwd(Q, K, V, sm_scale,  maskMat, #
     tl.store(dq_ptrs, dq)
 
 
-class _indexMask_attention(torch.autograd.Function):
+class _attention_bitShift_binBlkMask(torch.autograd.Function):
+    '''
+        This is a cleaned up version of the Binary Block Masked Attention.
+        It doesn't contain the casual masking logic.
+    '''
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, maskMat, strideMat, idxMat):
+    def forward(ctx, q, k, v, causal, sm_scale, maskMat, blkBinaryMask, blkBinaryMask_T):
         # shape constraints
         HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
         # when v is in float8_e5m2 it is transposed.
@@ -442,20 +495,21 @@ class _indexMask_attention(torch.autograd.Function):
         grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         _attn_fwd[grid](
-            q, k, v, sm_scale, M, o, maskMat, strideMat, idxMat, #
+            q, k, v, sm_scale, M, o, maskMat, blkBinaryMask,#
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
             maskMat.stride(0), maskMat.stride(1),  #
-            strideMat.stride(0), strideMat.stride(1),  #
-            idxMat.stride(0), idxMat.stride(1),  #
+            blkBinaryMask.stride(0), blkBinaryMask.stride(1),  #
             q.shape[0], q.shape[1],  #
             N_CTX=q.shape[2],  #
             HEAD_DIM=HEAD_DIM_K,  #
-            STAGE=stage,  #
             BLOCK_M = 128,
             BLOCK_N = 32,
             **extra_kern_args)
         
-        ctx.save_for_backward(q, k, v, o, M, maskMat, strideMat, idxMat)
+        ctx.save_for_backward(q, k, v, o, M, maskMat, blkBinaryMask, blkBinaryMask_T)
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
@@ -464,7 +518,7 @@ class _indexMask_attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
-        q, k, v, o, M, maskMat, strideMat, idxMat = ctx.saved_tensors
+        q, k, v, o, M, maskMat, blkBinaryMask, blkBinaryMask_T = ctx.saved_tensors
         assert do.is_contiguous()
         assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
         dq = torch.empty_like(q)
@@ -490,10 +544,12 @@ class _indexMask_attention(torch.autograd.Function):
         )
         grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
         _attn_bwd[grid](
-            q, arg_k, v, ctx.sm_scale, maskMat, do, dq, dk, dv,  #
+            q, arg_k, v, ctx.sm_scale, maskMat, blkBinaryMask, blkBinaryMask_T, do, dq, dk, dv,  #
             M, delta,  #
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
             maskMat.stride(0), maskMat.stride(1),  #
+            blkBinaryMask.stride(0), blkBinaryMask.stride(1),  #
+            blkBinaryMask_T.stride(0), blkBinaryMask_T.stride(1),  #
             N_HEAD, N_CTX,  #
             BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
             BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
@@ -506,4 +562,4 @@ class _indexMask_attention(torch.autograd.Function):
         return dq, dk, dv, None, None, None, None, None
 
 
-indexMask_attention = _indexMask_attention.apply
+attention_bitShift_binBlkMask = _attention_bitShift_binBlkMask.apply
