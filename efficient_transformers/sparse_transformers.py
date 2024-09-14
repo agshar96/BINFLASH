@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
 sys.path.append('/home/agniv/Documents/BINFLASH/')
 from utils import plot_binary_matrix
 

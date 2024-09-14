@@ -1,5 +1,6 @@
 import sys
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
+sys.path.append('/home/agniv/Documents/BINFLASH/') 
 
 from efficient_transformers.longformer import get_windowed_mask, get_dilated_window, get_global_mask
 from correct_fused_attention import attention_correct as openai
@@ -27,7 +28,7 @@ for mode in ["fwd", "bwd"]:
                 line_names=["Base Flash Attention", "Naive Attention Masking", "Binary Block Masking"],
                 styles=[("red", "-"), ("blue", "-"), ("green", "-")],
                 ylabel="ms",
-                plot_name=f"Longformer_Windowed-{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}",
+                plot_name=f"Longformer_Global-{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}",
                 args={
                     "H": N_HEADS,
                     "BATCH": BATCH,
@@ -55,7 +56,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
         elif provider == "naiveAttnMsk":
-            maskMat = get_windowed_mask(N_CTX, window_size=8)
+            maskMat = get_global_mask(N_CTX, window_size=8)
             maskMat = torch.tensor(maskMat, dtype=dtype, device=device)
             fn = lambda: naiveAttnMsk(q, k, v, causal, sm_scale, maskMat)
             if mode == "bwd":
@@ -63,7 +64,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
         elif provider == "binBlkMsk":
-            maskMat = get_windowed_mask(N_CTX, window_size=8)
+            maskMat = get_global_mask(N_CTX, window_size=8)
             maskMat = torch.tensor(maskMat, dtype=dtype, device=device)
             maskMat_blk, num_ones, offset = return_binBlk_matrices(maskMat, is_dense=True)
             maskMat_blk_T, num_ones_T, offset_T = return_binBlk_matrices(maskMat.T, is_dense=True)
@@ -89,4 +90,4 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     return ms
 
 if __name__ == "__main__":
-    bench_flash_attention.run(save_path="benchresult_applications/LongFormer/Windowed/", print_data=True)
+    bench_flash_attention.run(save_path="benchresult_applications/LongFormer/Global_fixed/", print_data=True)

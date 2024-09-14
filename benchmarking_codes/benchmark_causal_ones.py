@@ -1,9 +1,10 @@
 import sys
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
 sys.path.append('/home/agniv/Documents/BINFLASH/')
 
 from efficient_transformers.longformer import get_windowed_mask
-from correct_fused_attention import attention_correct as openai
-# from fused_attention import attention as openai
+# from correct_fused_attention import attention_correct as openai
+from fused_attention import attention as openai
 # from blockmask_attention import attention_binaryBlkMat as binBlkMsk_attn
 from binBlkMask_codes.base_binBlkMask import attention_binaryBlkMat as binBlkMsk_attn
 from binBlkMask_codes.dense_binBlkMask import attention_dense_binaryBlkMat as dense_binBlkMask
@@ -27,7 +28,7 @@ for mode in ["fwd", "bwd"]:
                 line_names=["Base Flash Attention","Naive Attention Mask", "Binary Block Masking", "Dense Binary Block Masking"],
                 styles=[("red", "-"), ("blue", "-"), ("green", "-"), ("purple", "-")],
                 ylabel="ms",
-                plot_name=f"Windowed_Dense-{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}",
+                plot_name=f"Causal-{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}",
                 args={
                     "H": N_HEADS,
                     "BATCH": BATCH,
@@ -49,13 +50,14 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     v = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
     try:
         if provider == "openai":
+            causal = True
             fn = lambda: openai(q, k, v, causal, sm_scale)
             if mode == "bwd":
                 o = fn()
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
         elif provider == "naiveAttnMsk":
-            maskMat = get_windowed_mask(N_CTX, window_size=N_CTX//2)
+            maskMat = np.tril(np.ones((N_CTX, N_CTX)))
             maskMat = torch.tensor(maskMat, dtype=dtype, device=device)
             fn = lambda: naiveAttnMsk(q, k, v, causal, sm_scale, maskMat)
             if mode == "bwd":
@@ -63,7 +65,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
         elif provider == "binBlkMsk":
-            maskMat = get_windowed_mask(N_CTX, window_size=N_CTX//2)
+            maskMat = np.tril(np.ones((N_CTX, N_CTX)))
             maskMat = torch.tensor(maskMat, dtype=dtype, device=device)
             maskMat_blk, num_ones, offset = return_binBlk_matrices(maskMat, is_dense=True)
             maskMat_blk_T, num_ones_T, offset_T = return_binBlk_matrices(maskMat.T, is_dense=True)
@@ -78,7 +80,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
 
         elif provider == "Dense_binBlkMsk":
             dense = True
-            maskMat = get_windowed_mask(N_CTX, window_size=N_CTX//2)
+            maskMat = np.tril(np.ones((N_CTX, N_CTX)))
             maskMat = torch.tensor(maskMat, dtype=dtype, device=device)
             maskMat_blk, num_ones, offset = return_binBlk_matrices(maskMat, is_dense=True)
             maskMat_blk_T, num_ones_T, offset_T = return_binBlk_matrices(maskMat.T, is_dense=True)
@@ -103,4 +105,4 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     return ms
 
 if __name__ == "__main__":
-    bench_flash_attention.run(save_path="benchresult_applications/Windowed_Demo", print_data=True)
+    bench_flash_attention.run(save_path="benchresult_applications/Causal", print_data=True)

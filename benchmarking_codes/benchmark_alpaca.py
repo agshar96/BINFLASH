@@ -3,6 +3,7 @@ This script is used to benchmark the two masks for ALPACA dataset task.
 Here we will use Dense Binary Block Mask, No Binary Block Mask, and Base Flash Attention.
 '''
 import sys
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
 sys.path.append('/home/agniv/Documents/BINFLASH/')
 
 from alpaca_datasets.alpaca_full_and_output import return_full_alpaca_mask

@@ -3,6 +3,7 @@ This script is used to benchmark the binary block masking algorithms against bas
 The masks are selected as causal, therefore only base OpenAI model is used, not corrected one.
 '''
 import sys
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
 sys.path.append('/home/agniv/Documents/BINFLASH/')
 
 from fused_attention import attention as openai

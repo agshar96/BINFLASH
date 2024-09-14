@@ -1,4 +1,5 @@
 import sys
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
 sys.path.append('/home/agniv/Documents/BINFLASH/')
 
 from triton_kernels.binBlkMask_kernels import return_binBlk_matrices, return_sum_matrix, return_sum_matrix_v2
@@ -18,7 +19,7 @@ configs.append(
         x_vals=[2**i for i in range(8,15)],
         line_arg="provider",
         line_vals=["binBlk","Dense_binBlk"], #, "blck_masked_rcm"],
-        line_names=["Binary Block Mask", "Binary mask and offsets"],
+        line_names=["BinBlkMsk", "BinBlkMsk with total_ones and offset"],
         styles=[("red", "-"), ("green", "-")],
         ylabel="ms",
         plot_name=f"kernel_bench",
@@ -29,8 +30,8 @@ configs.append(
 @triton.testing.perf_report(configs)
 def bench_kernels(N_CTX, provider, device="cuda"):
     assert provider in ["binBlk","Dense_binBlk"]
-    warmup = 25
-    rep = 100
+    warmup = 250
+    rep = 1000
     dtype = torch.float16
 
     try:
@@ -41,7 +42,7 @@ def bench_kernels(N_CTX, provider, device="cuda"):
             # o = fn
         elif provider == "Dense_binBlk":
             testMat = torch.ones((N_CTX, N_CTX), dtype=dtype, device=device)
-            fn = lambda: return_binBlk_matrices(testMat, is_dense=True)
+            fn = lambda: return_binBlk_matrices(testMat, 128, 32, is_dense=True)
             # o = fn()
         else:
             raise ValueError("Invalid provider")
@@ -54,4 +55,4 @@ def bench_kernels(N_CTX, provider, device="cuda"):
     return ms
 
 if __name__ == "__main__":
-    bench_kernels.run(save_path="benchresult_applications/kernels_nexts/", print_data=True)
+    bench_kernels.run(save_path="benchresult_applications/kernels/", print_data=True)

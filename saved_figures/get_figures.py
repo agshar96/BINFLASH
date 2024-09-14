@@ -1,10 +1,12 @@
 import sys
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
 sys.path.append('/home/agniv/Documents/BINFLASH/')
 
 import numpy as np
 import torch
 from triton_kernels.binBlkMask_kernels import return_binBlk_matrices
 from tree_attention.base_tree_attention import create_tree_mask
+from efficient_transformers.longformer import get_global_mask
 from utils import *
 from PIL import Image
 
@@ -44,11 +46,11 @@ def plot_and_save_binary_matrix(matrix, path, N = None, M = None, enable_grid = 
     # plt.show()
     plt.close()
 
-path = 'saved_figures/MEDUSA/'
+path = 'saved_figures/LongFormer/'
 
-matrix = create_tree_mask(3, 3)
+matrix = get_global_mask(32, 3)
 
-plot_and_save_binary_matrix(matrix, path + 'MEDUSA_big.png', enable_grid = False)
+plot_and_save_binary_matrix(matrix, path + 'Global_fixed.png', enable_grid = False)
 # plot_grid_and_save(hash_mat.cpu().numpy(), 16, 16, path + 'base_matrix_blocked.png')
 
 # binBlk_matrix = return_binBlk_matrices(hash_mat, 16, 16)

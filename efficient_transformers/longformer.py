@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+# Change this to the path of BINFLASH or just to '..' to point to the parent directory
 sys.path.append('/home/agniv/Documents/BINFLASH/')
 from utils import plot_binary_matrix
 
@@ -47,7 +48,7 @@ def get_dilated_window(N, window_size, dilation=1):
 
 def get_global_mask(N, window_size):
 
-    num_of_CLS = int(np.log2(N))
+    num_of_CLS = int(np.log2(N)) - 2
 
     mask = get_windowed_mask(N, window_size)
 
@@ -57,7 +58,7 @@ def get_global_mask(N, window_size):
     indices = np.arange(2, N)
     permuted_arr = np.random.permutation(indices)[:num_of_CLS]
     for i in permuted_arr:
-        mask[i, i:] = 1
-        mask[i:, i] = 1
+        mask[i, :] = 1
+        mask[:, i] = 1
 
     return mask
