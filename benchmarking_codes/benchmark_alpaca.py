@@ -4,7 +4,8 @@ Here we will use Dense Binary Block Mask, No Binary Block Mask, and Base Flash A
 '''
 import sys
 # Change this to the path of BINFLASH or just to '..' to point to the parent directory
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+#sys.path.append('/home/agniv/Documents/BINFLASH/')
+sys.path.append('..')
 
 from alpaca_datasets.alpaca_full_and_output import return_full_alpaca_mask
 from alpaca_datasets.prefix_llm_mask import return_prefix_llm_mask
@@ -94,4 +95,4 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     return ms
 
 if __name__ == "__main__":
-    bench_flash_attention.run(save_path="benchresult_applications/alpaca_Prefix_Mask", print_data=True)
+    bench_flash_attention.run(save_path="benchresult_applications/alpaca_Prefix_A100", print_data=True)

@@ -1,7 +1,8 @@
 import sys
 # Change this to the path of BINFLASH or just to '..' to point to the parent directory
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+#sys.path.append('/home/agniv/Documents/BINFLASH/')
 
+sys.path.append('..')
 from triton_kernels.binBlkMask_kernels import return_binBlk_matrices, return_sum_matrix, return_sum_matrix_v2
 from triton_kernels.binBlkMask_kernels_dontUse import return_binBlkMask
 
@@ -55,4 +56,4 @@ def bench_kernels(N_CTX, provider, device="cuda"):
     return ms
 
 if __name__ == "__main__":
-    bench_kernels.run(save_path="benchresult_applications/kernels/", print_data=True)
+    bench_kernels.run(save_path="benchresult_applications/kernels_A100/", print_data=True)
