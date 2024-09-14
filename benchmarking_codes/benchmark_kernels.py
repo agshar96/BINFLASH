@@ -56,4 +56,4 @@ def bench_kernels(N_CTX, provider, device="cuda"):
     return ms
 
 if __name__ == "__main__":
-    bench_kernels.run(save_path="benchresult_applications/kernels_A100/", print_data=True)
+    bench_kernels.run(save_path="benchresult_A100/kernels_A100/", print_data=True)

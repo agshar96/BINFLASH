@@ -95,4 +95,4 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     return ms
 
 if __name__ == "__main__":
-    bench_flash_attention.run(save_path="benchresult_applications/alpaca_Prefix_A100", print_data=True)
+    bench_flash_attention.run(save_path="benchresult_A100/alpaca_Prefix_A100", print_data=True)
