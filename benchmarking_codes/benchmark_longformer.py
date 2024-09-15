@@ -91,4 +91,4 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     return ms
 
 if __name__ == "__main__":
-    bench_flash_attention.run(save_path="benchresult_applications/LongFormer/Global_fixed/", print_data=True)
+    bench_flash_attention.run(save_path="BenchResult/LongFormer/Global_fixed/", print_data=True)

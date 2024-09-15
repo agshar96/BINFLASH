@@ -100,4 +100,4 @@ def bench_flash_attention(BATCH, H, MEDUSA_HEADS, HEAD_DIM, causal, mode, provid
     return ms
 
 if __name__ == "__main__":
-    bench_flash_attention.run(save_path="benchresult_applications/MEDUSA_HEADS/", print_data=True)
+    bench_flash_attention.run(save_path="BenchResult/MEDUSA_HEADS/", print_data=True)
