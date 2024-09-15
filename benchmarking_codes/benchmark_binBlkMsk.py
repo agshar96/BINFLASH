@@ -4,7 +4,8 @@ The masks are selected as causal, therefore only base OpenAI model is used, not 
 '''
 import sys
 # Change this to the path of BINFLASH or just to '..' to point to the parent directory
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+# sys.path.append('/home/agniv/Documents/BINFLASH/')
+sys.path.append('..')
 
 from fused_attention import attention as openai
 from binBlkMask_codes.base_binBlkMask import attention_binaryBlkMat as base_binBlkMask

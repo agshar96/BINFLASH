@@ -1,6 +1,7 @@
 import sys
 # Change this to the path of BINFLASH or just to '..' to point to the parent directory
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+# sys.path.append('/home/agniv/Documents/BINFLASH/')
+sys.path.append('..')
 
 from efficient_transformers.sparse_transformers import get_sparse_strided, get_sparse_fixed
 from correct_fused_attention import attention_correct as openai

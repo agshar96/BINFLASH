@@ -5,7 +5,8 @@ We do it for two cases: one for total number of predictions per head and the oth
 '''
 import sys
 # Change this to the path of BINFLASH or just to '..' to point to the parent directory
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+# sys.path.append('/home/agniv/Documents/BINFLASH/')
+sys.path.append('..')
 
 from tree_attention.base_tree_attention import patched_tree_mask, get_nctx_from_batchSize, get_nctx_from_predictions, padded_tree_mask
 from fused_attention import attention as openai

@@ -1,6 +1,7 @@
 import sys
 # Change this to the path of BINFLASH or just to '..' to point to the parent directory
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+# sys.path.append('/home/agniv/Documents/BINFLASH/')
+sys.path.append('..')
 
 import numpy as np
 import torch
@@ -46,11 +47,14 @@ def plot_and_save_binary_matrix(matrix, path, N = None, M = None, enable_grid = 
     # plt.show()
     plt.close()
 
-path = 'saved_figures/LongFormer/'
+path = 'saved_figures/Extremes/'
 
-matrix = get_global_mask(32, 3)
+# matrix = get_global_mask(32, 3)
 
-plot_and_save_binary_matrix(matrix, path + 'Global_fixed.png', enable_grid = False)
+# plot_and_save_binary_matrix(matrix, path + 'Global_fixed.png', enable_grid = False)
+
+matrix = np.ones((32, 32))
+plot_and_save_binary_matrix(matrix, path + 'Ones.png', enable_grid = False)
 # plot_grid_and_save(hash_mat.cpu().numpy(), 16, 16, path + 'base_matrix_blocked.png')
 
 # binBlk_matrix = return_binBlk_matrices(hash_mat, 16, 16)

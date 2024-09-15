@@ -1,7 +1,8 @@
 import numpy as np
 import sys
 # Change this to the path of BINFLASH or just to '..' to point to the parent directory
-sys.path.append('/home/agniv/Documents/BINFLASH/')
+# sys.path.append('/home/agniv/Documents/BINFLASH/')
+sys.path.append('..')
 from utils import plot_binary_matrix
 
 def get_windowed_mask(N, window_size):
